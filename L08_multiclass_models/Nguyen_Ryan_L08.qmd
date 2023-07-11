@@ -1,0 +1,378 @@
+---
+title: "L08 Multiclass Models"
+subtitle: "Data Science 2 with R (STAT 301-2)"
+author: "Ryan Nguyen"
+
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    embed-resources: true
+    code-fold: show
+    link-external-newwindow: true
+    
+execute:
+  warning: false
+  
+from: markdown+emoji 
+---
+
+## Overview
+
+This is an **OPTIONAL** lab. Students are not required to complete it. However, attempting the lab is **strongly** recommended, especially if your final project involves predicting a categorical outcome with multiple levels. This lab provides an example of the workflow for multiclass problems.
+
+## Loading Packages & Setting Seed
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(kableExtra)
+library(skimr)
+library(vip)
+set.seed(25)
+```
+
+
+## Tasks
+
+### Task 1
+
+For this lab, we will be working with the file `"pokemon.csv"`, found in `/data`. The file is from Kaggle: <https://www.kaggle.com/abcsds/pokemon>.
+
+The [Pokémon](https://www.pokemon.com/us/) franchise encompasses video games, TV shows, movies, books, and a card game. This data set was drawn from the video game series and contains statistics about 721 Pokémon, or "pocket monsters." In Pokémon games, the user plays as a trainer who collects, trades, and battles Pokémon to (a) collect all the Pokémon and (b) become the champion Pokémon trainer.
+
+Each Pokémon has a [primary type](https://bulbapedia.bulbagarden.net/wiki/Type) (some even have secondary types). Based on their type, a Pokémon is strong against some types, and vulnerable to others. (Think rock, paper, scissors.) A Fire-type Pokémon, for example, is vulnerable to Water-type Pokémon, but strong against Grass-type.
+
+![Fig 1. Vulpix, a Fire-type fox Pokémon from Generation 1.](images/vulpix.png){width="196"}
+
+The goal of this lab is to build a statistical learning model that can predict the **primary type** of a Pokémon based on its generation, legendary status, and six battle statistics.
+
+Read in the file and familiarize yourself with the variables using `pokemon_codebook.txt`. **Use `janitor::clean_names()`** to convert the column names to a case of your choice (we use snake case).
+
+```{r}
+pokemon <- read.csv("data/Pokemon.csv") %>% 
+  janitor::clean_names() %>% 
+  select(-c(x))
+```
+
+### Task 2
+
+Using the entire data set, create a bar chart of the outcome variable, `type_1`.
+
+How many classes of the outcome are there? Are there any Pokémon types with very few Pokémon? If so, which ones?
+
+**ANSWER:** There are 18 classes of the outcome, type_1. Flying has very few Pokemon. Fairy has the next loweset amount of Pokemon.
+
+For this lab, we'll ignore the rarer classes by simply filtering them out. Filter the entire data set to contain only Pokémon whose `type_1` is Bug, Fire, Grass, Normal, Water, or Psychic. After filtering, it will be useful to convert `type_1` to a factor.
+
+```{r}
+ggplot(pokemon, aes(x = type_1)) +
+  geom_bar()
+
+pokemon <- pokemon %>% 
+  filter(type_1 %in% c("Bug", "Fire", "Grass", "Normal", "Water", "Psychic")) %>% 
+  mutate(type_1 = factor(type_1))
+```
+
+
+### Task 3
+
+Do a `skim()` of the entire data set. Do you notice any problems? If so, what?
+
+The variable `legendary` is a logical vector and would be easier to work with as one of our standard types (numeric or factor).
+
+For our models, we won't be using the variables `number`, `name`, `type_2`, or `total`. You can choose to remove these when writing your recipe or do so now, before the split.
+
+```{r}
+skim(pokemon)
+
+pokemon <- pokemon %>% 
+  mutate(legendary = factor(legendary)) %>% 
+  select(-c(name, type_2, total))
+```
+
+**ANSWER:** After doing an initial skim, there seems to be no missingness issues with this data set. 
+
+### Task 4
+
+Perform an initial split of the data. Stratify by the outcome variable. You can choose a proportion to use. Verify that your training and test sets have the desired number of observations.
+
+Next, use V-fold cross-validation on the training set. Use 3 folds and 4 repeats. Consider stratifying the resamples on `type_1` as well. Why might this be useful?
+
+```{r}
+pokemon_split <- initial_split(pokemon, prop = 0.8, strata = type_1)
+
+pokemon_train <- training(pokemon_split)
+
+pokemon_test <- testing(pokemon_split)
+
+pokemon_folds <- vfold_cv(pokemon_train, v = 3, repeats = 4, strata = type_1)
+
+dim(pokemon_train)
+dim(pokemon_test)
+
+```
+
+**ANSWER:** It would be useful to stratify on type_1 to ensure that we have different types represented in each fold and repeat. Pokemon training set has 364 observations, while the testing set has 94 observations.
+
+### Task 5
+
+Set up a recipe to predict `type_1` with `legendary`, `generation`, `sp_atk`, `attack`, `speed`, `defense`, `hp`, and `sp_def`.
+
+Center and scale all predictor variables.
+
+```{r}
+pokemon_recipe <- recipe(type_1 ~., data = pokemon_train) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_normalize(all_predictors()) %>% 
+  step_zv(all_predictors())
+```
+
+
+### Task 6
+
+We'll be comparing three model groups:
+
+1.  Elastic net, tuning `penalty` and `mixture` (hint: `multinom_reg` with `glmnet` engine)
+2.  Random forest models, tuning `mtry` and `min_n`;
+3.  Boosted tree models, tuning `mtry`, `trees`, and `learn_rate`; &
+4.  KNN models, tuning `neighbors`.
+
+Set up each of these three models. Store the `parameters()` for each model and `update()` them as indicated: `mtry` should range from 2 to 6, `neighbors` from 1 to 30, and `learn_rate` from 0.3 to 0.8 (need to use `trans = scales::identity_trans()`). Use defaults for all others.
+
+For tree-based models, include `importance = "impurity"` as an argument to the `set_engine()` function. This will allow you to create a variable importance plot (VIP) later.
+
+```{r}
+### Elastic net
+elastic_spec <- multinom_reg(penalty = tune(), mixture = tune()) %>% 
+  set_engine("glmnet")
+
+elastic_param <- extract_parameter_set_dials(elastic_spec)
+
+elastic_workflow <- workflow() %>% 
+  add_model(elastic_spec) %>% 
+  add_recipe(pokemon_recipe)
+
+### Random forest
+rf_spec <- rand_forest(min_n = tune(),
+                       mtry = tune(),
+                       trees = 1000) %>% 
+  set_engine("ranger", importance = "impurity") %>% 
+  set_mode("classification")
+
+rf_param <- extract_parameter_set_dials(rf_spec) %>% 
+  update(mtry = mtry(range = c(2,6)))
+
+rf_workflow <- workflow() %>% 
+  add_model(rf_spec) %>% 
+  add_recipe(pokemon_recipe)
+
+### Boosted trees
+bt_spec <- bt_model <- boost_tree(mode = "classification",
+                                  min_n = tune(),
+                                  mtry = tune(), 
+                                  learn_rate = tune()) %>% 
+  set_engine("xgboost", importance = "impurity")
+
+bt_param <- extract_parameter_set_dials(bt_spec) %>% 
+  update(mtry = mtry(range = c(2,6)),
+         learn_rate = learn_rate(range = c(.3, .8),
+                                 trans = scales::identity_trans()))
+
+bt_workflow <- workflow() %>% 
+  add_model(bt_spec) %>% 
+  add_recipe(pokemon_recipe)
+
+### KNN
+knn_spec <- nearest_neighbor(mode = "classification",
+                              neighbors = tune()) %>% 
+  set_engine("kknn")
+
+knn_param <- extract_parameter_set_dials(knn_spec) %>% 
+  update(neighbors = neighbors(range = c(1,30)))
+
+knn_workflow <- workflow() %>% 
+  add_model(knn_spec) %>% 
+  add_recipe(pokemon_recipe)
+
+```
+
+
+### Task 7
+
+Create regular grids for the tuning parameters for each of the three model groups. You can choose the value of the `levels` argument for these; we recommend adjusting based on your computing power, as increasing the number of levels can increase the number of models exponentially.
+
+```{r}
+elastic_grid <- grid_regular(elastic_param, levels = 5)
+
+rf_grid <- grid_regular(rf_param, levels = 5)
+
+bt_grid <- grid_regular(bt_param, levels = 5)
+
+knn_grid <- grid_regular(knn_param, levels = 5)
+```
+
+
+### Task 8
+
+Tune each of the four model classes on your folded data!
+
+```{r}
+#| eval: FALSE
+
+# elastic
+tuned_elastic <- tune_grid(
+  elastic_workflow,
+  pokemon_folds, 
+  elastic_grid
+)
+
+# rf
+tuned_rf <- tune_grid(
+  rf_workflow,
+  pokemon_folds, 
+  rf_grid
+)
+
+# bt
+tuned_bt <- tune_grid(
+  bt_workflow,
+  pokemon_folds, 
+  bt_grid
+)
+
+#knn
+tuned_knn <- tune_grid(
+  knn_workflow,
+  pokemon_folds, 
+  knn_grid
+)
+```
+
+
+### Task 9
+
+Since this is a classification problem, we'll be using the [area under the ROC curve](https://campuswire.com/c/GF1F63F57/feed/271) as a metric, or `roc_auc`. Run `autoplot()` and `show_best()` on each of your tuned models from Task 8. Remember to set the `metric` argument to `"roc_auc"` for these. 
+
+How is this metric used to compare models? What was the best performing model for each of the model classes? Which is the best overall?
+```{r}
+tuned_elastic <- read_rds("results/tuned_elastic.rds")
+tuned_rf <- read_rds("results/tuned_rf.rds")
+tuned_bt <- read_rds("results/tuned_bt.rds")
+tuned_knn <- read_rds("results/tuned_knn.rds")
+
+autoplot(tuned_elastic)
+autoplot(tuned_rf)
+autoplot(tuned_bt)
+autoplot(tuned_knn)
+
+best_elastic <- show_best(tuned_elastic, metric = "roc_auc")[1,]
+best_rf <- show_best(tuned_rf, metric = "roc_auc")[1,]
+best_bt <- show_best(tuned_bt, metric = "roc_auc")[1,]
+best_knn <- show_best(tuned_knn, metric = "roc_auc")[1,]
+
+best_elastic
+best_rf
+best_bt
+best_knn
+
+best_rmse <- tibble(model = c("ELASTIC", "RF", "BT", "KNN"),
+                    roc_auc = c(best_elastic$mean, best_rf$mean, best_bt$mean, best_knn$mean),
+                    se = c(best_elastic$std_err, best_rf$std_err, best_bt$std_err, best_knn$std_err))
+best_rmse
+
+ggplot(best_rmse, aes(x = model, y = roc_auc)) + 
+  geom_point() + 
+  geom_errorbar(aes(ymin = roc_auc - 1.96*se,
+                ymax = roc_auc + 1.96*se), width = 0.2) + 
+  theme_minimal()
+```
+
+
+**ANSWER:** `roc_auc`finds the area under the curve of the roc, AKA the receiver operating characteristic (ROC) curve, which computes the sensitivity and specificity over a continuum of different event thresholds. Unlike RMSE, you want a higher value for `roc_auc`, as a higher value means there is more sensitivity to the model. The best model overall was the random forest model, where mtry was 4 and min_n was 8. This results in an roc_auc of 0.73395.
+
+### Task 10
+
+After identifying the best model, use `finalize_workflow()` to your finalize the appropriate workflow with the best performing parameter values.
+
+Fit the winning model to the entire **training set**.
+
+```{r}
+rf_workflow <- rf_workflow %>% 
+  finalize_workflow(select_best(tuned_rf, metric = "roc_auc"))
+
+
+fit_final <- fit(rf_workflow, pokemon_train)
+```
+
+
+### Task 11
+
+Use `predict()` with `type = "prob"` to generate class probabilities from the winning model for the **test set**. Pipe this into `roc_auc()`. Note that you need to specify the column names for the class probabilities as arguments to `roc_auc()` and, later, `roc_curve()`.
+
+What is the overall AUC value for your model when used on the test data?
+
+Using a similar process, create ROC curves using `roc_curve()` and `autoplot()`. Also, create a confusion matrix for your model (see `conf_mat()`). These will help us answer the following questions:
+
+-   Is your model equally good or equally bad at distinguishing every Pokémon type?
+
+-   Which type(s) does it predict well/poorly?
+
+```{r}
+pokemon_pred <- pokemon_test %>% 
+  select(type_1) %>% 
+  bind_cols(predict(fit_final, pokemon_test, type = "class")) %>% 
+  bind_cols(predict(fit_final, pokemon_test, type = "prob"))
+
+roc_auc(pokemon_pred, .pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Psychic, .pred_Water, truth = type_1)
+
+pokemon_curve <- roc_curve(pokemon_pred, .pred_Bug, .pred_Fire, .pred_Grass, .pred_Normal, .pred_Psychic, .pred_Water, truth = type_1)
+
+autoplot(pokemon_curve)
+
+conf_mat(pokemon_pred, type_1, .pred_class)
+
+# visualize prettier
+pokemon_pred %>% 
+  conf_mat(type_1, .pred_class) %>% 
+  autoplot(type = "heatmap")
+    
+```
+**ANSWER:** The overall AUC is 0.683 when used on the test data. It was best at predicting normal and psychic pokemons.
+
+### Task 12
+
+Take the results from fitting your winning model (likely a tree-based model) to the training data, and pipe them into `pull_workflow_fit()` and `vip()`. *Note: You may need to install and load the `vip`* *package*. If your winning model is not tree-based, train your best tree-based model on the entire training dataset (i.e., treat it like it was the best model).
+
+Interpret this plot. Which variables were most frequently used to predict Pokémon type? Are you surprised by these results? Why or why not?
+
+```{r}
+fit_final %>% 
+  pull_workflow_fit() %>% 
+  vip()
+```
+
+
+### Task 13
+
+Finally, for fun, let's see what the model predicts for a specific Pokémon, like Vulpix (Fig. 1).
+
+Take the full data set and use `filter()` to extract the row corresponding to `name` for a Pokémon of your choice (or you can use Vulpix).
+
+Use `predict()` to generate a prediction, using your winning model, for the row of `new_data` you just extracted.
+
+What type did your model predict for the Pokémon you chose? Was your model right or wrong?
+
+```{r}
+new_data <- read.csv("data/Pokemon.csv") %>% 
+  janitor::clean_names() %>% 
+  select(-c(x)) %>% 
+  filter(name == "Vulpix") 
+
+vulpix_pred <- new_data %>% 
+  select(type_1) %>% 
+  bind_cols(predict(fit_final, new_data, type = "class"))
+
+vulpix_pred
+
+```
+

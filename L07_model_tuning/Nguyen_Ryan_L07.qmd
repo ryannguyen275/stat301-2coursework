@@ -1,0 +1,364 @@
+---
+title: "L07 Model Tuning"
+subtitle: "Data Science 2 with R (STAT 301-2)"
+author: "Ryan Nguyen"
+
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    embed-resources: true
+    code-fold: show
+    link-external-newwindow: true
+    
+execute:
+  warning: false
+  
+from: markdown+emoji 
+---
+
+
+## Overview
+
+This lab covers material up to and including [13. Grid (search section 13.3)](https://www.tmwr.org/grid-search.html){target="_blank"}  from [Tidy Modeling with R](https://www.tmwr.org/){target="_blank"} . In this lab, we start with a new data set and go through the entire modeling process -- splitting the data and using repeated V-fold cross-validation to choose and tune a model.
+
+**This lab can serve as an example of the overall statistical learning process (that you will use for your final project).** Your project should generally follow similar steps (although it may include more exploration of the training set, and comparing more types of models).
+
+
+::: {.callout-note}
+
+## Load Package(s) & Setting a Seed
+
+Recall that it is best practice to load your packages towards the top of your document. 
+
+Now that we are performing steps that involve randomness (data splitting) it is best practice to set a seed for the pseudo random algorithms. Why? Because it ensures our random steps are reproducible which has all kinds of practical benefits. Kind of mind blowing to replicate things that are supposed to be random! In general, setting a seed should occur towards the top of the document. 
+
+Some might argue a seed should be set right before each step involving randomness, which is reasonable, but we prefer for it to be set once at the top of the document.
+:::
+
+```{r}
+# load packages
+library(tidyverse)
+library(tidymodels)
+library(janitor)
+library(kableExtra)
+library(xgboost)
+
+set.seed(25)
+```
+
+
+## Tasks
+
+### Task 1
+
+For this lab, we will be working with a simulated dataset, designed to accompany the book [An Introduction to Statistical Learning with Applications in R](https://www.statlearning.com/). The data set consists of 400 observations concerning the sale of child car seats at different stores.
+
+Our goal with this data is regression; specifically, to build **and tune** a model that can predict car seat sales as accurately as possible.
+
+Load the data from `data/carseats.csv` into *R* and familiarize yourself with the variables it contains using the codebook (`data/carseats_codebook.txt`).
+
+```{r}
+carseats <- read_csv("data/carseats.csv") %>% 
+  janitor::clean_names()
+
+ggplot(carseats, aes(x = sales)) + 
+  geom_histogram(color = "white", bins = 20)
+```
+
+
+### Task 2
+
+Using the full dataset, explore/describe the distribution of the outcome variable `sales`. Perform a quick `skim` of the data and note any potential problems (like missingness).
+
+```{r}
+skimr::skim_without_charts(carseats)
+```
+
+
+### Task 3
+
+Split the data! **Make sure to set a seed.** Use stratified sampling.
+
+You should choose the proportions to split the data into. Verify that the training and testing data sets have the appropriate number of observations.
+
+Then use V-fold cross-validation with 10 folds, repeated 5 times, to fold the **training** data.
+
+```{r}
+carseats_split <- initial_split(carseats, 
+                                prop = 0.8, 
+                                strata = sales)
+
+carseats_train <- training(carseats_split)
+
+carseats_test <- testing(carseats_split)
+
+carseats_folds <- vfold_cv(carseats_train, v = 10, repeats = 5,
+                     strata = sales)
+```
+
+
+### Task 4
+
+Set up a recipe. The recipe should predict `sales` (the outcome) using all other variables in the data set. Add steps to your recipe to:
+
+-   one-hot encode all categorical predictors, &
+
+-   center and scale all predictors.
+
+`prep()` and `bake()` your recipe on the training data. How many columns are there in the data after you've processed it? You'll need to use this number as an upper limit for possible values of `mtry`.
+
+```{r}
+carseats_recipe <- recipe(sales ~., data = carseats_train) %>% 
+  # one-hot encode
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% 
+  # center all predictors
+  step_normalize(all_predictors())
+
+carseats_recipe %>% 
+  prep() %>% 
+  bake(new_data = NULL) %>% 
+  view()
+```
+
+**ANSWER:** There are 15 columns in the data after we've processed it. 
+
+### Task 5
+
+We will train and tune **three competing model types**:
+
+1.  A random forest model (`rand_forest()`) with the `ranger` engine;
+2.  A boosted tree model (`boost_tree()`) with the `xgboost` engine;
+3.  A *k*-nearest neighbors model (`nearest_neighbor()`) with the `kknn` engine.
+
+*Hint:* Ensure engine packages are installed.
+
+Set up and store each of these three models with the appropriate function and engine.
+
+For the random forest model, we will tune the hyper-parameters `mtry` and `min_n`. For the boosted tree model, we will tune `mtry`, `min_n`, and `learn_rate`. For the *k*-nearest neighbors model, we will tune `neighbors`. **When you set up these models, you should flag these parameters for tuning with `tune()`**.
+
+
+```{r}
+# rf model
+rf_model <- rand_forest(mode = "regression",
+                        min_n = tune(),
+                        mtry = tune()) %>% 
+  set_engine("ranger")
+
+# bt model
+bt_model <- boost_tree(mode = "regression",
+                       min_n = tune(),
+                       mtry = tune(), 
+                       learn_rate = tune()) %>% 
+  set_engine("xgboost")
+
+# knn model
+knn_model <- nearest_neighbor(mode = "regression",
+                              neighbors = tune()) %>% 
+  set_engine("kknn")
+```
+
+### Task 6
+
+Now we will set up and store **regular grids** with 5 levels of possible values for tuning hyper-parameters for each of the three models.
+
+Example for random forest model:
+
+```{r}
+# rf grids
+rf_params <- parameters(rf_model) %>% 
+  # N := maximum number of random predictor columns we want to try 
+  # should be less than the number of available columns
+  update(mtry = mtry(c(1, 10))) 
+
+rf_grid <- grid_regular(rf_params, levels = 5)
+
+# bt grids
+bt_params <- parameters(bt_model)  %>% 
+  update(mtry = mtry(c(1, 10))) %>% 
+  update(learn_rate = learn_rate(range = c(-5, -0.2)))
+
+bt_grid <- grid_regular(bt_params, levels = 5)
+
+### knn
+knn_params <- parameters(knn_model)
+
+knn_grid <- grid_regular(knn_params, levels = 5)
+  
+```
+
+The parameters `min_n` and `neighbors` have default tuning values should work reasonably well, so we won't need to update their defaults manually. For `mtry`, we will need to use `update()` (as shown above) to change the upper limit value to the number of predictor columns. For `learn_rate`, we will also use `update()`, this time to set `range = c(-5, -0.2)`.
+
+### Task 7
+
+Print one of the grid tibbles that you created in Task 6 and explain what it is in your own words. Why are we creating them?
+```{r}
+knn_grid
+```
+
+
+**ANSWER:** We create these grids to predefine our set of parameter values, in this case for neighbors, to evaluate. We put 5 for levels, meaning this is how many parameter combinations we will evaluate. 
+
+### Task 8
+
+For each of our 3 competing models (random forest, boosted tree, and knn), set up a workflow, add the appropriate model from Task 5, and add the recipe we created in Task 4.
+
+Example for random forest model:
+
+```{r}
+## rf
+rf_workflow <- workflow() %>% 
+  add_model(rf_model) %>% 
+  add_recipe(carseats_recipe)
+
+## bt
+bt_workflow <- workflow() %>% 
+  add_model(bt_model) %>% 
+  add_recipe(carseats_recipe)
+
+## knn
+knn_workflow <- workflow() %>% 
+  add_model(knn_model) %>% 
+  add_recipe(carseats_recipe)
+```
+
+### Task 9
+
+Here's the fun part, where we get to tune the parameters for these models and find the values that optimize model performance across folds!
+
+Take each of your three workflows from Task 8. Pipe each one into `tune_grid()`. Supply your folded data and the appropriate grid of parameter values as arguments to `tune_grid()`.
+
+**WARNING: STORE THE RESULTS OF THIS CODE. You will NOT want to re-run this code each time you knit your .Rmd. We strongly recommend running it in an .R script and storing the results for each model with `write_rds()` or similar. You may also want to use RStudio's jobs functionality (but are not required to).**
+
+
+```{r}
+#| eval = FALSE
+
+## rf
+rf_tuned <- rf_workflow %>% 
+  tune_grid(carseats_folds, grid = rf_grid)
+
+write_rds(rf_tuned, 
+          file = "results/rf_tuned.rds")
+
+## bt
+bt_tuned <- bt_workflow %>% 
+  tune_grid(carseats_folds, grid = bt_grid)
+
+write_rds(bt_tuned, 
+          file = "results/bt_tuned.rds")
+
+## knn
+knn_tuned <- knn_workflow %>% 
+  tune_grid(carseats_folds, grid = knn_grid)
+
+write_rds(knn_tuned, 
+          file = "results/knn_tuned.rds")
+```
+
+### Task 10
+
+Let's check out the results!
+
+Use `autoplot()` on each of the objects you stored in Task 9. Set the `metric` argument of `autoplot()` to `"rmse"` for each. (Otherwise it will produce plots for *R*^2^ as well -- doesn't hurt, but we're interested in RMSE.)
+
+Pick one of the three `autoplot()`s you've produced and describe it in your own words. What happens to the RMSE as the values of the tuning parameters change?
+
+```{r}
+rf_tuned <- read_rds("results/rf_tuned.rds")
+
+bt_tuned <- read_rds("results/bt_tuned.rds")
+
+knn_tuned <- read_rds("results/knn_tuned.rds")
+
+autoplot(rf_tuned, metric = "rmse")
+
+autoplot(bt_tuned, metric = "rmse")
+
+autoplot(knn_tuned, metric = "rmse")
+```
+
+**ANSWER:** In the autoplot for our knn model, as the number of neighbors increases, the RMSE decreases. This shows that the optimal amount of neighbors is around 15. Having 15 neighbors in the tuning parameter  produced the smallest/ best RMSE value. 
+
+### Task 11
+
+Run `select_best()` on each of the three tuned models. Which of the three models (after tuning) produced the smallest RMSE across cross-validation **(which is the "winning" model)**? What are the optimum value(s) for its tuning parameters?
+
+```{r}
+best_rf <- show_best(rf_tuned, metric = "rmse")[1,]
+
+best_bt <-show_best(bt_tuned, metric = "rmse")[1,]
+
+best_knn <-show_best(knn_tuned, metric = "rmse")[1,]
+
+best_rmse <- tibble(model = c("BT", "KNN", "RF"),
+                    RMSE = c(best_bt$mean, best_knn$mean, best_rf$mean),
+                    se = c(best_bt$std_err,best_knn$std_err, best_rf$std_err))
+best_rmse
+
+#visualize
+ggplot(best_rmse, aes(x = model, y = RMSE)) + 
+  geom_point() + 
+  geom_errorbar(aes(ymin = RMSE - 1.96*se,
+                ymax = RMSE + 1.96*se), width = 0.2) + 
+  theme_minimal()
+```
+**ANSWER:** The boosted tree model had the smallest/ best RMSE value. The optimum values for tuning parameters are: mtry = 10, min_n = 30, and learn_rate = .631 
+
+### Task 12
+
+We've now used 10-fold cross-validation (with 5 repeats) to tune three competing models -- a random forest, a boosted tree, and a KNN model. You've selected the "winning" model and learned the optimal values of its tuning parameters to produce the lowest RMSE on assessment data across folds.
+
+Now we can **use the winning model and the tuning values to fit the model to the entire training data set**.
+
+
+```{r}
+bt_workflow <- bt_workflow %>% 
+  finalize_workflow(select_best(bt_tuned, metric = "rmse"))
+
+
+fit_final <- fit(bt_workflow, carseats_train)
+```
+
+### Task 13
+
+Finally, at long last, we can use the **testing data set** that we set aside in Task 3!
+
+Use `predict()`, `bind_cols()`, and `metric_set()` to fit your tuned model to the testing data.
+
+```{r}
+carseats_metric <- metric_set(rmse, rsq)
+
+carseat_pred <- predict(fit_final, carseats_test) %>% 
+  bind_cols(carseats_test %>% select(sales))
+
+carseat_pred %>% 
+  carseats_metric(truth = sales, estimate = .pred)
+```
+
+### Task 14
+
+How did your model do on the brand-new, untouched testing data set? Is the RMSE it produced on the testing data similar to the RMSE estimate you saw while tuning?
+
+**ANSWER:** The model did better on the testing data than our estimate. The RMSE for the testing data is 1.34 which is better compared to the 1.49 seen in the training data. 
+
+
+### Task 15
+
+Visualize your results by plotting the predicted observations by the observed observations. (Could also be useful to visualize your residuals.)
+
+```{r}
+ggplot(carseat_pred, aes(x = sales, y = .pred)) + 
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 1)
+
+# visualize residuals 
+carseat_pred <- carseat_pred %>% 
+  mutate(residuals = sales - .pred)
+
+ggplot(carseat_pred, aes(x = .pred, y = residuals)) + 
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 0)
+```
+
+
