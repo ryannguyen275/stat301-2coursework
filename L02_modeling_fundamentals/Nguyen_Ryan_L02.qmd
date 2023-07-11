@@ -1,0 +1,220 @@
+---
+title: "L02 Modeling Fundamentals"
+subtitle: "Data Science 2 with R (STAT 301-2)"
+author: "Ryan Nguyen"
+
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: show
+    link-external-newwindow: true
+    
+execute:
+  warning: false
+  
+from: markdown+emoji  
+---
+
+
+## Overview
+
+The goal of this lab is to review basic model syntax, diagnostics, model comparison, and prediction in R for linear models.
+
+## Datasets
+
+For the following exercises we will be using the `College` and `Auto` datasets from the `/data` subdirectory. Remember you can find codebooks for the data in the `ISLR` package; for example, `?ISLR::College`. May want to consider copying and using the `processed` data from L01 into the data folder.
+
+```{r}
+library(tidyverse)
+
+auto <- read_csv("data/Auto.csv") %>% 
+  janitor::clean_names()
+
+college <- read_csv("data/College.csv")%>% 
+  janitor::clean_names()
+
+# cleaning up auto
+auto_clean <- auto %>% 
+  mutate(horsepower = as.numeric(horsepower), 
+         origin = as_factor(origin),
+         cylinders = as_factor(cylinders))
+# saving auto as an rds
+write_rds(auto_clean, "data/processed/auto_clean.rds")
+
+college_clean <- college %>% 
+  janitor::clean_names() %>% 
+  mutate(private = as_factor(private))
+
+write_rds(college_clean, "data/processed/college_clean.rds")
+```
+
+
+## Exercises
+
+### Exercise 1
+
+Run a linear model predicting `grad_rate` using the `College` data. Include `accept`, `outstate`, and `private` as predictors. Provide a summary of the model.
+
+```{r}
+model_1 <- lm(grad_rate ~ accept + outstate + private, college_clean)
+summary(model_1)
+```
+
+### Exercise 2
+
+Expand on your model from Exercise 1. Include ALL possible interactions between `accept`, `outstate`, and `private`. Use a formula shortcut. Provide a summary of the model.
+
+```{r}
+model_2 <- lm(grad_rate ~ accept * outstate * private, college_clean)
+summary(model_2)
+```
+
+
+### Exercise 3
+
+Assess the residual and Q-Q plots for your models in Exercises 1 and 2. Are the assumptions met? Why or why not?
+
+You can use base plots as shown in the book, or try challenging yourself to use `ggplot2` to create these plots.
+
+```{r}
+plot(model_1, which = 1)
+
+plot(model_2, which = 1)
+
+plot(model_1, which = 2)
+
+plot(model_2, which = 2)
+```
+
+**ANSWER:** The assumption of constance variance is met since the variance of the residual appears to be close enough to being consistent for both models. Additionally, the normality assumption is met since it appears there is an approximate straight line for both models in the QQ plot, despite there being small deviations from both ends. 
+
+### Exercise 4
+
+Use `anova()` to compare the model in Exercise 1 (without interactions) to the model in Exercise 2 (with interactions). Does including the interactions significantly improve the model? How do you know?
+
+```{r}
+anova(model_1, model_2)
+```
+**ANSWERS:** Including the interactions do not significantly improve the model because the p-value is greater than 0.05, at 0.2271. The model without interactions is a subset of the model with interactions, and is better since the additional terms do not do anything significant. 
+
+### Exercise 5
+
+Use the `predict()` function (with the "better" model) to predict the graduation rate of a private university with 5,000 accepted applications and \$6,000 out-of-state tuition.
+```{r}
+new_grad_rate <- data.frame(private = "Yes", accept = 5000, outstate = 6000)
+predict(model_1, new_grad_rate)
+```
+
+**ANSWER:** Using the `predict` function with `model_1`, we found that the graduation rate of a private university with 5,000 accepted applications and \$6,000 out-of-state tuition would be predicted to be 59.98.
+
+### Exercise 6
+
+Begin by spliting the `Auto` dataset into training and test datasets.
+
+Using the `training` dataset, find at least 3 variables that have a relationship with `mpg` and build a linear model with those variables as predictors (simple additive model no interaction or transformations).
+
+*Hint: consider correlation and visual plots with mpg*
+
+```{r}
+# splitting auto data set into training and test
+library(tidymodels)
+
+set.seed(1234)
+
+auto_split <- initial_split(auto_clean, prob = 0.8)
+  
+auto_training <- training(auto_split)
+auto_testing <- testing(auto_split)
+
+```
+
+```{r}
+# finding variables with relationships with mpg
+auto_training %>%
+  ggplot(aes(x = mpg, y = origin)) +
+  geom_boxplot()
+
+auto_training %>%
+  ggplot(aes(x = displacement, y = origin)) +
+  geom_boxplot()
+
+auto_training %>%
+  ggplot(aes(x = weight, y = origin)) +
+  geom_boxplot()
+
+auto_training %>%
+  ggplot(aes(x = acceleration, y = origin)) +
+  geom_boxplot()
+
+auto_training %>%
+  ggplot(aes(x = year, y = origin)) +
+  geom_boxplot()
+
+auto_training %>%
+  ggplot(aes(x = horsepower, y = origin)) +
+  geom_boxplot()
+```
+
+```{r}
+# building model with horsepower, displacement, and weight as predictors
+model_6 <- lm(mpg ~ horsepower + displacement + weight, auto_training)
+summary(model_6)
+```
+
+
+### Exercise 7
+
+Assess the residual and Q-Q plots for your model in Exercise 6. Are the assumptions met? They most likely are not. If they are not met, perform an appropriate transformation. Store this new model and check the assumptions again until you have an "acceptable" model.
+
+*Hint: should we transform x or y? Look at the relationship of mpg with the variables you chose.*
+
+```{r}
+plot(model_6, which = 1)
+
+plot(model_6, which = 2)
+
+model_7 <-lm(sqrt(mpg) ~ horsepower + displacement + weight, auto_training)
+plot(model_7, which = 1)
+plot(model_7, which = 2)
+```
+**ANSWER:** The assumptions are not met since the residual plot is funnel-shaped, and the points deviate significantly in the QQ plot from the straight line. After doing a log transformation of mpg, we have found that the assumptions are now met with a constant residual 
+plot and a QQ plot that is approximately straight.
+
+### Exercise 8
+
+Assess and compare the model performance between the model in Exercise 6 and Exercise 7 using RMSE.
+
+```{r}
+modelr:: rmse(model_6, auto_testing)
+
+pred_log <- (predict(model_7, auto_testing))^(2)
+error <- auto_testing$mpg - pred_log
+sqrt(mean(error^2))
+```
+
+**ANSWER:** While comparing the models from exercise 6 and exercise 7, model from exercise 7 is the best since the RMSE is lower. 
+
+### Exercise 9
+
+Build any linear model that performs "better" than your models in Exercise 7 and 8. Performance metric is up to you.
+
+*If you cannot find a better model, you should show a table/summary of the models you tried with their corresponding performance metric.*
+
+```{r}
+model_9 <- lm(log(mpg) ~ horsepower + displacement + weight, auto_training)
+plot(model_9, which = 1)
+plot(model_9, which = 2)
+pred_9 <- exp(predict(model_9, auto_testing))
+error_9 <- auto_testing$mpg - pred_9
+sqrt(mean(error_9^2))
+
+
+model_10 <- lm(log(mpg) ~ horsepower * displacement * weight, auto_training)
+plot(model_10, which = 1)
+plot(model_10, which = 2)
+pred_log_10 <- exp(predict(model_10, auto_testing))
+error_10 <- auto_testing$mpg - pred_log_10
+sqrt(mean(error_10^2))
+```
+**ANSWER:** A linear model that will perform better than the models in exercise 7 and 8 would be model 9 and 10. Model 9 takes the log transformation of the model, and model 10 takes the log transformation, as well as a polynomial transformation. Both of these models result in a lower RMSE than the models in exercise 7 and 8, meaning they perform "better". 

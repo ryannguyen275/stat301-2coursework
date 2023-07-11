@@ -1,0 +1,212 @@
+---
+title: "L03 Fitting Models"
+subtitle: "Data Science 2 with R (STAT 301-2)"
+author: "Ryan Nguyen"
+
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: show
+    link-external-newwindow: true
+    
+execute:
+  warning: false
+  
+from: markdown+emoji  
+---
+
+
+## Overview
+
+The goal of this lab is to practice using `parsnip` to define and fit models using its standardized interface with a variety of models.
+
+This lab accompanies [4. The Ames housing data](https://www.tmwr.org/ames.html){target="_blank"}, [5. Spending our data](https://www.tmwr.org/splitting.html){target="_blank"}, and [6. Fitting models with parsnip](https://www.tmwr.org/models.html){target="_blank"} from [Tidy Modeling with R](https://www.tmwr.org/){target="_blank"}.
+
+## Loading Packages & Setting Seed
+```{r}
+library(tidymodels)
+library(tidyverse)
+library(rstanarm)
+library(parsnip)
+
+set.seed(1254)
+```
+
+
+## Data
+
+We will be using the `kc_house_data.csv` dataset found in the `\data` directory. The data set contains 21,613 house sale prices (`price`) and other information for homes sold between May 2014 and May 2015 in King County, WA. Take a moment to read the variable definitions in `kc_house_data_codebook.txt`.
+
+## Exercises
+
+### Exercise 1
+
+We are interested in building a predictive model for the sale prices in King County, WA. Our first step is to do a quick inspection of the outcome variable, **AND ONLY** the outcome variable, `price`.
+
+```{r}
+kc_data <- read_csv("data/kc_house_data.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(waterfront = as.factor(waterfront),
+         view = as.factor(view),
+         condition = as.factor(condition),
+         grade = as.factor(grade),
+         price_log = log(price)) # make sure to remove price when modeling with -price
+
+ggplot(kc_data, aes(x = price)) + 
+  geom_histogram()
+```
+
+
+Are there issues with symmetry? If so, perform an appropriate transformation.
+
+*ANSWER*: There are issues with symmetry. The data is clearly right-skewed. 
+
+```{r}
+ggplot(kc_data, aes(x = price_log)) + 
+  geom_histogram()
+```
+
+
+### Exercise 2
+
+Use the `rsample` package, part of `tidymodels`, to split the King County data into a **training** and a **testing** data set using stratified sampling.
+
+1.  Remember that this is a random process, and we want to be able to reproduce this specific sample every time we knit. To do this, you need to set a seed. You should set a seed in the towards the top of your document, usually completed with the loading of packages. The seed number can be any number you like.
+
+2.  You should decide on the percentages to split the data into.
+
+After splitting, verify that each of the resulting data frames has the correct number of columns and rows.
+
+::: {.callout-caution}
+
+For the rest of this lab, unless specified, you should assume that you are working with the training and testing data created in this step.
+
+:::
+
+```{r}
+kc_split <- initial_split(kc_data, prob = 0.8, strata = price_log)
+  
+kc_training <- training(kc_split)
+kc_testing <- testing(kc_split)
+```
+
+### Exercise 3
+
+For now we will ignore the process of feature engineering and focus on fitting several different models to predict the outcome variable with `waterfront`, `sqft_living`, `yr_built`, and `bedrooms`.
+
+Define and fit the following models to your training set using the `parsnip` package.
+
+- Ordinary linear regression
+- Regularized/penalized linear regression (elastic net `glmnet`) with `mixture = 1`, which is called lasso regression, with `penalty = 0.01`
+- Regularized/penalized linear regression (elastic net `glmnet`) with `mixture = 0` which is called ridge regression, with `penalty = 0.01`.
+
+```{r}
+### OLS
+lm_mod <- linear_reg() %>% 
+  set_engine("lm")
+
+OLS_3 <- lm_mod %>%
+  fit(price_log ~ waterfront + sqft_living + yr_built + bedrooms , data = kc_training)
+
+### Lasso
+lasso_mod <- linear_reg(penalty = 0.01, mixture = 1) %>% 
+  set_engine("glmnet")
+
+lasso_3 <- lasso_mod %>% 
+   fit(price_log ~ waterfront + sqft_living + yr_built + bedrooms , data = kc_training)
+
+
+### Ridge
+ridge_mod <- linear_reg(penalty = 0.01, mixture = 0) %>% 
+  set_engine("glmnet")
+
+ridge_3 <- ridge_mod %>% 
+  fit(price_log ~ waterfront + sqft_living + yr_built + bedrooms , data = kc_training)
+
+```
+
+
+### Exercise 4
+
+Compare each of the fitted models from Exercise 3 using `broom::tidy()`. Output is not enough, you should write a few sentences.
+
+```{r}
+broom::tidy(OLS_3)
+broom::tidy(lasso_3)
+broom::tidy(ridge_3)
+```
+
+**ANSWER:** When looking at the models predicting the log of price, the ordinary linear regression (OLS) has an intercept of 17.776, waterfront has a coefficient of 0.553, sqft_living has a coefficient of ~0.000, year built has a coefficient of -0.003, and bedrooms has a coefficient of -0.043. With the lasso regression, it has an intercept of 16.758, waterfront has a coefficient of 0.472, sqft_living has a coefficient of ~0.000, year built has a coefficient of -0.002, and bedrooms has a coefficient of -0.018. With the ridge regression, it has an intercept of 16.786, waterfront has a coefficient of 0.570, sqft_living has a coefficient of ~0.000, year built has a coefficient of -0.002, and bedrooms has a coefficient of -0.018. Both the lasso and ridge regression decreased the intercept estimates. Lasso decreased the waterfront coefficient, while ridge increased it. Both decreased the sqft living coefficient. Both increased the bedrooms and year built coefficients.
+
+
+### Exercise 5
+
+For each model, calculate and store the predicted values for the test set. 
+
+For the model fit using ordinary linear regression, include 95% prediction intervals. 
+
+Why is it important to note that these predictions are on a log scale? If they aren't on a log scale, why aren't they?
+
+*Thinking ahead:* How might we use these predicted values to compare each model's performance on the test set? 
+
+```{r}
+kc_testing %>% 
+  select(price, price_log) %>% 
+  bind_cols(predict(OLS_3, kc_testing)) %>% 
+  # add 95% prediction intervals to results
+  bind_cols(predict(OLS_3, kc_testing, type = "pred_int"))
+
+kc_testing %>% 
+  select(price, price_log) %>% 
+  bind_cols(predict(lasso_3, kc_testing))
+
+kc_testing %>% 
+  select(price, price_log) %>% 
+  bind_cols(predict(ridge_3, kc_testing))
+
+```
+**ANSWER:** It's important to note that these predicted values are on a log scale because they are much more compact and the scale becomes nonlinear. There is a large value range of price, but taking the log of price allows us to view the values based on magnitude. Additionally, the values predicted are relatively lower (12-15) so it is important that users understand we are predicting the log of a price of a house, and that the actual price is not 12 USD. We can use these predicted values to compare each model's performance by finding the RMSE and seeing which is the smallest.
+
+### Exercise 6 
+
+Repeat exercise 5, but report predicted values and 95% prediction intervals, where possible, on original scale (not on log scale). 
+
+Why might this be useful?
+
+```{r}
+kc_testing %>% 
+  select(price, price_log) %>% 
+  bind_cols(predict(OLS_3, kc_testing)) %>% 
+  # add 95% prediction intervals to results
+  bind_cols(predict(OLS_3, kc_testing, type = "pred_int")) %>% 
+  mutate(
+    across(contains("."), ~exp(.))
+  )
+  
+
+kc_testing %>% 
+  select(price, price_log) %>% 
+  bind_cols(predict(lasso_3, kc_testing)) %>% 
+  mutate(
+    across(contains("."), ~exp(.))
+  )
+
+kc_testing %>% 
+  select(price, price_log) %>% 
+  bind_cols(predict(ridge_3, kc_testing)) %>% 
+  mutate(
+    across(contains("."), ~exp(.))
+  )
+```
+**ANSWER:** This might be useful as we directly predict the price of a house on an original sale unit, instead of a transformed scale unit. This is more intuitive, as we are directly seeing the price of a house, and don't have to do further calculations using exp. 
+
+### Challenge
+
+**Optional tasks to help advance your knowledge**
+
+Repeat exercises 3-6 using these additional models:
+
+- Random forest model using `ranger` with `trees = 500` and `min_n = 5`
+- Regularized/penalized regression using a Bayesian approach (`rstanarm` package)
+
