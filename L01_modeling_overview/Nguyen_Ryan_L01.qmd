@@ -1,0 +1,224 @@
+---
+title: "L01 Modeling Overview"
+subtitle: "Data Science 2 with R (STAT 301-2)"
+author: "Ryan Nguyen"
+
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: show
+    link-external-newwindow: true
+    
+execute:
+  warning: false
+  echo: true
+  
+from: markdown+emoji  
+---
+
+## Overview
+
+The first goal of this lab is to ensure that all relevant software for this course is properly installed, functional, and up-to-date. Next, this lab aims to test student understanding of the fundamental modeling concepts (prediction vs. inference, classification vs. regression, and mechanistic vs. empirically driven models). Students are also asked to perform small EDAs, which should be review to those who took STAT 301-1.
+
+:::{.callout-note}
+## Reminder
+
+Students must create an R project for each lab, do their work within the project, and upload their 3 files (.R, .qmd, and .html) according to the course naming conventions as described on Canvas.
+:::
+
+## Exercises
+
+### Exercise 1 
+
+Download and install the most recent versions of R and RStudio. Install and load `tidyverse`, `tidymodels`, and `ISLR`.
+
+```{r}
+# Load package(s) here!
+library(tidyverse)
+library(tidymodels)
+library(ISLR)
+```
+
+<br>
+
+### Exercise 2
+
+Use the tidyverse `read_` function(s) to load the `Auto` and `College` datasets in the `data/` subdirectory into R.
+
+```{r}
+auto <- read_csv("data/Auto.csv") %>% 
+  janitor::clean_names()
+
+college <- read_csv("data/College.csv")%>% 
+  janitor::clean_names()
+
+```
+
+
+<br>
+
+### Exercise 3
+
+Use proper data typing to clean the `Auto` and `College` dataset and write the clean dataset to a `processed` folder within the `data` folder to preserve the file types.
+
+*In practice, this step in the EDA is done within a cleaning.R script.*
+
+*You can find the codebook for `Auto` and `College` by loading the `ISLR` package and running the command `?Auto` and `?College`, respectively.*
+
+```{r}
+# cleaning up auto
+auto <- auto %>% 
+  mutate(horsepower = as.numeric(horsepower), 
+         origin = as_factor(origin),
+         cylinders = as_factor(cylinders))
+# saving auto as an rds
+write_rds(auto, "data/processed/auto.rds")
+
+college <- college %>% 
+  janitor::clean_names() %>% 
+  mutate(private = as_factor(private))
+
+write_rds(auto, "data/processed/college.rds")
+
+write_rds(college, "data/processed/college_clean.rds")
+```
+
+<br>
+
+### Exercise 4
+
+Using the `Auto` dataset...
+
+a) determine which variables could be used as an outcome variable to a classification problem and which variables could be used as an outcome variable to a regression problem.
+
+**ANSWER:** For a classification problem, the variables that could be used as an outcome variable are "horsepower", "origin", and "cylinders", and the variables that could be used as a regression variable are "mpg", "displacement", "weight", "acceleration", and "year".
+
+b) choose and state **one** variable to be the response in a **classification** problem. 
+
+**ANSWER:** The origin will be my response variable. 
+
+c) perform a short EDA to determine which variables might make for good predictors for your chosen response variable. List which variables you would use in this model (you don't need to actually create a model).
+
+<br>
+
+**ANSWER:**
+```{r}
+auto %>%
+  ggplot(aes(x = mpg, y = origin)) +
+  geom_boxplot()
+
+auto %>%
+  ggplot(aes(x = displacement, y = origin)) +
+  geom_boxplot()
+
+auto %>%
+  ggplot(aes(x = weight, y = origin)) +
+  geom_boxplot()
+
+auto %>%
+  ggplot(aes(x = acceleration, y = origin)) +
+  geom_boxplot()
+
+auto %>%
+  ggplot(aes(x = year, y = origin)) +
+  geom_boxplot()
+
+auto %>%
+  ggplot(aes(x = horsepower, y = origin)) +
+  geom_boxplot()
+```
+c) Based on the EDA, I think that mpg, horsepower, and weight are the best predictors for origin, since there seems to be the most variance in origin with these predictors. 
+
+d) what are $n$ and $p$ (sample size and number of predictors) for this hypothetical model?
+
+**ANSWER:** The sample size would be 397, and the number of predictors would be 3. 
+
+### Exercise 5
+
+Using the `College` dataset...
+
+a) determine which variables could be used as an outcome variable to a classification problem and which variables could be used as an outcome variable to a regression problem.
+
+**ANSWER:** For a classification problem, the variables that could be used as an outcome variable are private, and the variables that could be used as a regression variable are apps, accept, enroll, top10perc, top25perc, f_undergrad,p_undergrad, outstate, room_board, books, personal, ph_d, terminal, s_f_ratio, perc_alumni, expend, and grad_rate.
+
+b) choose **one** variable to be the response in a **regression** problem.
+
+**ANSWER:** I choose top10perc for the regression problem.
+
+c) perform a short EDA to determine which variables might make for good predictors for your chosen response variable. List which variables you would use in this model (you don't need to actually create a model).
+
+**ANSWER:**
+
+```{r}
+college %>% 
+  ggplot(aes(x = accept, y = top10perc)) + 
+  geom_point()
+
+college %>% 
+  ggplot(aes(x = apps, y = top10perc)) + 
+  geom_point()
+
+college %>% 
+  ggplot(aes(x = outstate, y = top10perc)) + 
+  geom_point()
+
+college %>% 
+  ggplot(aes(x = ph_d, y = top10perc)) + 
+  geom_point()
+
+college %>% 
+  ggplot(aes(x = enroll, y = top10perc)) + 
+  geom_point()
+
+college %>% 
+  ggplot(aes(x = private, y = top10perc)) + 
+  geom_boxplot()
+```
+
+Based on this EDA, I would choose accept, ph_d, and private as the variables in this model. Since there appears to be stronger relationships between these variables and top10perc.
+
+d) what are $n$ and $p$ (sample size and number of predictors) for this hypothetical model?
+
+**ANSWER:** The sample size would be 777 and the number of predictors would be 3 (accept, ph_d, and private). 
+
+<br>
+
+### Exercise 6
+
+For each of the following examples, please describe: (1) whether the scenario is a classification or regression problem; (2) whether the goal is inferential or predictive; (3) the sample size ($n$) and the number of predictors ($p$).
+
+(a) We collect a set of data on the top 500 firms in the US. For each firm we record profit, number of employees, industry, and CEO salary. We are interested in understanding which factors affect CEO salary.
+
+**ANSWER:** This scenario is classification, the goal is inferential, the sample size is 500, and the number of predictors are 3. 
+
+(b) We are considering launching a new product and wish to know whether it will be a success or a failure. We collect data on 20 similar products that were previously launched. For each product we have recorded whether it was a success or a failure, the price charged for the product, the marketing budget, the competition price, and ten other variables.
+
+**ANSWER:** This scenario is classification since the outcomes are success or failure, the goal is predictive since we're trying to produce an accurate prediction of the product's success, the sample size is 20, and the number of predictors is 14. 
+
+(c) We are interested in predicting the % change in the USD/Euro exchange rate in relation to the weekly changes in the world stock markets. We collect data once a week for all of 2012. For each week we record the % change in the USD/Euro rate, the % change in the US market, the % change in the British market, and the % change in the German market.
+
+**ANSWER:** This scenario is regression since our outcome will be a number (% change in exchange rate), the goal is predictive since we're trying to produce an accurate prediction of the change, the sample size is 52 (number of weeks in 2012), and the number of predictors is 4. 
+
+<br>
+
+### Exercise 7
+
+Provide two real-life examples -- one of a case where someone might use a mechanistic model, and one where they might use an empirically driven model. For each, explain why. These examples must differ from those in the book.
+
+**ANSWER:** My real-life example will center around social media marketing. One example where someone might use a mechanistic model is 
+creating a linear regression to assume that y (amount of likes for a post) follows a form of equation, let's say in response to x (amount of money put into a post). On the other hand, someone might use an empirically driven model such as k-nearest neighbors, where the prediction of the success for a post could be predicted by comparing the 5-nearest social media accounts and their posts.
+
+## Challenge
+
+**Optional task to help advance your knowledge -- Required for graduate students**
+
+### Challenge 1
+
+Explain, in your own words, the difference(s) between a predictive model and an inferential model. When might you use one kind of model versus the other? Why?
+
+One key difference between a predictive model and an inferential model is that the predictive model is designed to estimate an accurate future value (i.e. how many books am I selling next month, what is the temperature tomorrow), whereas inferential models are designed to confirm an inference on a hypothesis (i.e. will I sell more books than last month, will the temperature be above 60 degrees tomorrow). You might want to use a predictive model instead of an inferential when you are trying to find a specific value, whereas an inferential model might be more beneficial if you were testing the accuracy of an already existing estimate. 
+
+
+
+
