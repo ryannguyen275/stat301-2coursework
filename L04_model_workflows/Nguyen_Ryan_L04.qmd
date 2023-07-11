@@ -1,0 +1,298 @@
+---
+title: "L04 Model Workflows & Recipes"
+subtitle: "Data Science 2 with R (STAT 301-2)"
+author: "Ryan Nguyen"
+
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: show
+    link-external-newwindow: true
+    
+execute:
+  warning: false
+  
+from: markdown+emoji  
+---
+
+## Overview
+
+The goal of this lab is to introduce the process of initiating a model workflow and adding a recipe
+
+This lab accompanies [7. A model workflow](https://www.tmwr.org/workflows.html) and [8. Feature Engineering with recipes](https://www.tmwr.org/recipes.html) from [Tidy Modeling with R](https://www.tmwr.org/).
+
+
+```{r}
+library(tidymodels)
+library(tidyverse)
+library(parsnip)
+library(rstanarm)
+library(splines)
+set.seed(1254)
+```
+
+
+## Exercises
+
+We will be modifying and extending the work completed in L03. The work included specifying and fitting several models to predict home prices using the KC housing dataset (`data\kc_house_data.csv`). The dataset contains 21,613 house sale prices (`price`) and other information for homes sold between May 2014 and May 2015 in King County, WA.
+
+Code from L03 will likely be useful for reference and/or for building upon.
+
+### Exercise 1
+
+We are setting up our workflows for training predictive models so we should begin by setting up our training and testing sets.
+
+Begin by loading the data and making sure that in is minimally prepared for the fitting models. At minimum we should check that data is being read in correctly, variables are being typed correctly, and inspect the response/target variable (make adjustments if necessary).
+
+1. From L03 we know that we will want to perform a $log_{10}$ transformation of our outcome variable.
+2. We will want to re-type several variables as factors: `waterfront` (nominal/un-ordered), `view` (ordered), `condition` (ordered), and `grade` (ordered).
+
+```{r}
+kc_data <- read_csv("data/kc_house_data.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(waterfront = as.factor(waterfront),
+         view = factor(view, ordered = TRUE),
+         condition = factor(condition, ordered = TRUE),
+         grade = factor(grade, ordered = TRUE),
+         log_price = log10(price)) # make sure to remove price when modeling with -price
+```
+
+Now perform an initial split of the dataset into testing and training sets using the `rsample` package. We suggest using strata when splitting because it is rarely a bad idea. Use the default number of strata. What is the default number of strata used? 
+
+```{r}
+kc_split <- initial_split(kc_data, prob = 0.8, strata = log_price)
+  
+kc_training <- training(kc_split)
+kc_testing <- testing(kc_split)
+```
+
+**ANSWER:** The default number of strata is 4, as the data is split into 4 elements (quartiles).
+
+### Exercise 2
+
+Define 4 model types:
+
+- Ordinary linear regression
+- Regularized/penalized linear regression (elastic net `glmnet`) with `mixture = 1`, which is called lasso regression, with `penalty = 0.01`.
+- Regularized/penalized linear regression (elastic net `glmnet`) with `mixture = 0` which is called ridge regression, with `penalty = 0.01`.
+- Random forest model using `ranger` with `trees = 500` and `min_n = 5`
+
+```{r}
+### OLS
+lm_spec <- linear_reg() %>% 
+  set_engine("lm")
+
+### Lasso
+lasso_spec <- linear_reg(penalty = 0.01, mixture = 1) %>% 
+  set_engine("glmnet")
+
+### Ridge
+ridge_spec <- linear_reg(penalty = 0.01, mixture = 0) %>% 
+  set_engine("glmnet")
+
+### Random forest spec
+rf_spec <- rand_forest(trees = 500, min_n = 5) %>% 
+  set_engine("ranger") %>% 
+  set_mode("regression")
+```
+
+
+### Exercise 3
+
+We will now define our recipe and set up our workflow that will allow us to fit our model to our training data and predict on our testing data.
+
+#### Task 1
+
+Define a recipe that uses `waterfront`, `sqft_living`, `yr_built`, and `bedrooms` to predict the target/outcome variable. 
+
+```{r}
+kc_rec <- recipe(log_price ~ waterfront + sqft_living + yr_built, data = kc_training) %>% 
+  step_dummy(all_nominal_predictors())
+```
+
+
+#### Task 2
+
+Create a workflow that adds the model specifications and the recipe. There should be 4 workflows, one for each model type. 
+
+Hint: You most likely encountered an error. Go back to Task 1 and add a `step_` that will fix this error.
+
+```{r}
+## OLS
+kc_wkflow_lm <- workflow() %>% 
+  add_model(lm_spec) %>% 
+  add_recipe(kc_rec)
+
+## Lasso
+kc_wkflow_lasso <- workflow() %>% 
+  add_model(lasso_spec) %>% 
+  add_recipe(kc_rec)
+
+## Ridge
+kc_wkflow_ridge <- workflow() %>% 
+  add_model(ridge_spec) %>% 
+  add_recipe(kc_rec)
+
+## Random forest spec
+kc_wkflow_rf <- workflow() %>% 
+  add_model(rf_spec) %>% 
+  add_recipe(kc_rec)
+```
+
+
+#### Task 3
+
+Train each workflow by fitting the workflow object to the training data. Compare each of the fitted models (except the random forest model) using `broom::tidy()`. Output is not enough, you should write a few sentences.
+
+
+```{r}
+# OLS
+kc_fit_lm <- fit(kc_wkflow_lm, kc_training)
+broom::tidy(kc_fit_lm)
+
+# lasso
+kc_fit_lasso <- fit(kc_wkflow_lasso, kc_training)
+broom::tidy(kc_fit_lasso)
+
+# ridge
+kc_fit_ridge <- fit(kc_wkflow_ridge, kc_training)
+broom::tidy(kc_fit_ridge)
+
+# random forest
+kc_fit_rf <- fit(kc_wkflow_rf, kc_training)
+```
+**ANSWER:** The linear regression model (OLS) has the greatest estimate for the intercept at 7.638, followed by the ridge regression at 7.263, and the lasso regression at 6.729. The linear regression model also has the greatest coefficient for sqft_living at 0.000182, followed by ridge regression at 0.000169, and lasso regression at 0.000168.The ridge regression shrunk the coefficients by adding a penalty term. The lasso regression set unimportant variables closer to 0.
+
+#### Task 4
+
+Evaluate which of the 4 models is best by using `predict()` and calculating the RMSE.
+
+```{r}
+# OLS
+kc_pred_lm <- kc_testing %>% 
+  bind_cols(predict(kc_fit_lm, kc_testing)) %>% 
+  select(price, log_price, .pred)
+
+kc_pred_lm %>% 
+  rmse(log_price, .pred)
+
+# lasso
+kc_pred_lasso <- kc_testing %>% 
+  bind_cols(predict(kc_fit_lasso, kc_testing)) %>% 
+  select(price, log_price, .pred)
+
+kc_pred_lasso %>% 
+  rmse(log_price, .pred)
+
+# ridge
+kc_pred_ridge <- kc_testing %>% 
+  bind_cols(predict(kc_fit_ridge, kc_testing)) %>% 
+  select(price, log_price, .pred)
+
+kc_pred_ridge %>% 
+  rmse(log_price, .pred)
+
+# random forest 
+kc_pred_rf <- kc_testing %>% 
+  bind_cols(predict(kc_fit_rf, kc_testing)) %>% 
+  select(price, log_price, .pred)
+
+kc_pred_rf %>% 
+  rmse(log_price, .pred)
+```
+
+**ANSWER:** The linear regression model is the best since it has the smallest RMSE at 0.1605. The ridge regression is the second best with the next smallest RMSE at 0.1609. The lasso regression is the third best with the third smallest RMSE at 0.1614. The random forest model is the worst model with the largest RMSE at 0.1648.
+
+### Exercise 4
+
+The `tidymodels` workflow makes it easy to fit your data to a new recipe or modify an existing recipe. 
+
+You only need to complete this Exercise with ONE model type (ols, lasso, ridge, or random forest). This time we will be using `waterfront`, `sqft_living`, `sqft_lot`, `bedrooms`, `lat`, and `date` as our predictors.
+
+#### Task 1
+
+First we will pre-process the data by visualizing relationships to determine if a transformation is necessary. 
+
+- Visualize the relationship of the outcome variable with `sqft_lot` and `lat`. 
+- What could an appropriate transformation be for those variables?
+
+```{r}
+# log is a pretty good transformation to make the relationship visualization look less funnel-shaped and more linear
+ggplot(kc_training, aes(x = log(sqft_lot), y = log_price)) + 
+  geom_point()
+
+# spline function to replace numeric predictor with column set that allow model to emulate flexible, nonlinear relationship
+ggplot(kc_training, aes(x = (lat), y = log_price)) + 
+  geom_point() + 
+  geom_smooth(method = "lm",
+              formula = y ~ ns(x, df = 5),
+              se = FALSE)
+```
+
+
+#### Task 2
+
+Define a recipe that uses `waterfront`, `sqft_living`, `sqft_lot`, `bedrooms`, `lat`, and `date` to predict the target/outcome variable. 
+
+- Add a step to transform dummy variables
+- Add a step that does an appropriate transformation on `lat`
+- Add a step that does an appropriate transformation on `sqft_lot`
+- Add a step that does a date transformation that extracts the `features` of "month" 
+
+If you complete only these tasks there will be a potential problem with our recipe. What is the problem and how do we remedy it? You may need to look at the model fit to help see the issue.
+
+```{r}
+recipe_2_kc <- recipe(log_price ~ waterfront + sqft_living + sqft_lot 
+                      + bedrooms + lat + date, data = kc_training) %>% 
+  # dummy variables
+  step_dummy(all_nominal_predictors()) %>% 
+  # lat 
+  step_ns(lat, deg_free = 5) %>% 
+  # sqft_lot
+  step_log(sqft_lot) %>% 
+  # extract month from date transformation
+  step_date(date, features = c("month")) %>% 
+  update_role(date, new_role = "id")
+
+```
+
+**ANSWER**: When initially creating the recipe, a problem we run into is with the date transformation. `step_date()` keeps both date and month, so it is basically inputted in twice. The date is pretty much an identifier of when it got sold, not a predictor. When we extract the month, it becomes a predictor. Thus, we update the role using `update_role()` to convert the date into an identifier. 
+
+
+#### Task 3
+
+Calculate predicted values on both the log scale and original scale of the outcome variable using your recipe from Task 2. There are several steps you will need to do before you `predict`.
+
+Note: When doing this it would be useful to include both the prediction and the actual/observed outcome from the test set.
+
+```{r}
+wkflow_new <- workflow() %>% 
+  add_model(lm_spec) %>% 
+  add_recipe(recipe_2_kc)
+
+fit_new <- fit(wkflow_new, kc_training)
+
+pred_price <- kc_testing %>%
+  bind_cols(predict(fit_new, kc_testing)) %>% 
+  bind_cols(10^(predict(fit_new, kc_testing))) %>% 
+  select(price, log_price,.pred...23, .pred...24)
+
+pred_price
+
+pred_price %>% 
+  rmse(log_price, .pred...23)
+
+pred_price %>% 
+  rmse(log_price, .pred...24)
+
+
+```
+
+
+
+## Challenge
+
+**Not Required**
+
+Set up a workflow set using the `workflowsets` package that would cover all the work necessary for Exercise 2. 
